@@ -19,11 +19,13 @@ impl Emulator {
 
 fn main() {
     let mut emulator = Emulator::new(1024);
-    let mut buf      = [0; 64];
-    emulator.memory.write(VAddr(0x0), b"This will get overwritten");
-    emulator.memory.write(VAddr(0x10), b"This will get overwritten");
-    emulator.memory.read(VAddr(0x0), &mut buf);
+    let mut buf      = [0; 0x2a];
+    let message      = b"This will get overwritten.";
 
-    buf.iter().for_each(|&c| if c != 0 { print!("{}", c as char) });
-    println!();
+    emulator.memory.allocate(64);
+    emulator.memory.write(VAddr(0x0), message).unwrap();
+    emulator.memory.write(VAddr(0x10), message).unwrap();
+    emulator.memory.read(VAddr(0x0), &mut buf[..message.len()+0x10]).unwrap();
+
+    println!("{}", buf.into_iter().map(|c| c as char).collect::<String>());
 }
