@@ -10,10 +10,12 @@ const PERM_EXEC:  u8 = 1 << 2;
 
 
 /// Memory permissions for a corresponding address
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Perm(pub u8);
 
 /// A guest Virtual Address
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VAddr(pub usize);
 
