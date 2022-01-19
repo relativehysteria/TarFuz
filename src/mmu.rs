@@ -8,6 +8,11 @@ const PERM_READ:  u8 = 1 << 1;
 /// Exec permission
 const PERM_EXEC:  u8 = 1 << 2;
 
+
+/// Memory permissions for a corresponding address
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Perm(pub u8);
+
 /// A guest Virtual Address
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VAddr(pub usize);
@@ -19,7 +24,7 @@ pub struct Mmu {
 
     /// Permissions of the corresponding memory.
     /// This doubles the memory footprint, I am aware
-    permissions: Vec<u8>,
+    permissions: Vec<Perm>,
 
     /// Base `VAddr` of the next allocation
     alloc_base: VAddr,
@@ -40,7 +45,7 @@ impl Mmu {
         let aligned_size = (size + alignment) & !alignment;
         Self {
             memory:      vec![0; aligned_size],
-            permissions: vec![0; aligned_size],
+            permissions: vec![Perm(0); aligned_size],
             alloc_base,
             alignment,
         }
@@ -64,7 +69,7 @@ impl Mmu {
         }
 
         // Mark the memory as writable
-        self.set_permissions(cur_base, size, PERM_WRITE)?;
+        self.set_permissions(cur_base, size, Perm(PERM_WRITE))?;
 
         self.alloc_base = next_base;
         Some(cur_base)
@@ -73,9 +78,9 @@ impl Mmu {
     /// Set the permissions of a `size` long memory block starting from `addr`
     /// to `perm`
     pub fn set_permissions(&mut self, addr: VAddr,
-                           size: usize, perm: u8) -> Option<()> {
+                           size: usize, perm: Perm) -> Option<()> {
         self.permissions.get_mut(addr.0..addr.0.checked_add(size)?)?
-            .iter_mut().for_each(|x| *x = perm);
+            .iter_mut().for_each(|x| x.0 = perm.0);
         Some(())
     }
 
@@ -86,7 +91,7 @@ impl Mmu {
             self.permissions.get_mut(addr.0..addr.0.checked_add(buf.len())?)?;
 
         // Check that we can write to memory
-        if perms.iter().any(|x| (x & PERM_WRITE) == 0) {
+        if perms.iter().any(|x| (x.0 & PERM_WRITE) == 0) {
             return None;
         }
 
@@ -95,7 +100,7 @@ impl Mmu {
             .copy_from_slice(&buf);
 
         // Set it all to be readable
-        perms.iter_mut().for_each(|x| *x |= PERM_READ);
+        perms.iter_mut().for_each(|x| x.0 |= PERM_READ);
         Some(())
     }
 
@@ -105,7 +110,7 @@ impl Mmu {
             self.permissions.get(addr.0..addr.0.checked_add(buf.len())?)?;
 
         // Check that we can read from memory
-        if perms.iter().any(|x| (x & PERM_READ) == 0) {
+        if perms.iter().any(|x| (x.0 & PERM_READ) == 0) {
             return None;
         }
 
