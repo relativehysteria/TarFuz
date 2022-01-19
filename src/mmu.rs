@@ -23,27 +23,40 @@ pub struct Mmu {
 
     /// Base `VAddr` of the next allocation
     alloc_base: VAddr,
+
+    /// Memory is aligned to this base
+    alignment: usize,
 }
 
 impl Mmu {
-    /// Create a new `size` long memory space
+    /// Create a new `size` long memory space.
+    ///
+    /// Allocation base of the virtual memory is set to `0x0`.
+    /// All memory is aligned to `0xf`.
     pub fn new(size: usize) -> Self {
+        let alignment  = 0xf;
+        let alloc_base = VAddr(0x0);
+
+        let aligned_size = (size + alignment) & !alignment;
         Self {
-            memory:      vec![0; size],
-            permissions: vec![0; size],
-            alloc_base:  VAddr(0x0),
+            memory:      vec![0; aligned_size],
+            permissions: vec![0; aligned_size],
+            alloc_base,
+            alignment,
         }
     }
 
+    /// Returns the number `num` aligned to `self.alignment`
+    pub fn align(&self, num: usize) -> usize {
+        (num + self.alignment) & !self.alignment
+    }
+
+
     /// Allocate a region in memory
     pub fn allocate(&mut self, size: usize) -> Option<VAddr> {
-        // Padding to align the memory correctly. This helps cache friendliness
-        let mem_align = 0xf;
-        let align_pad = (size + mem_align) & !mem_align;
-
         // Update the allocation base
         let cur_base  = VAddr(self.alloc_base.0);
-        let next_base = VAddr(cur_base.0.checked_add(align_pad)?);
+        let next_base = VAddr(cur_base.0.checked_add(self.align(size))?);
 
         // Don't allocate OOM
         if next_base.0 > self.memory.len() {
@@ -101,5 +114,54 @@ impl Mmu {
             &self.memory.get(addr.0..addr.0.checked_add(buf.len())?)?
         );
         Some(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MSG: &[u8] = b"This is some text that is written into the memory.";
+
+    #[test]
+    fn byte_perfect_allocation() {
+        let mut mem = Mmu::new(MSG.len());
+        mem.allocate(MSG.len()).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn out_of_memory() {
+        let mut mem = Mmu::new(0x400);
+        mem.allocate(0x100).unwrap(); // OK
+        mem.allocate(0x100).unwrap(); // OK
+        mem.allocate(0x100).unwrap(); // OK
+        mem.allocate(0x100).unwrap(); // OK
+        mem.allocate(0x1).unwrap();   // Panic
+    }
+
+    #[test]
+    fn read_write() {
+        let mut mem = Mmu::new(MSG.len());
+        let mut buf = [0; MSG.len()];
+        mem.allocate(MSG.len()).unwrap();
+        mem.write(VAddr(0x0), MSG).unwrap();
+        mem.read(VAddr(0x0), &mut buf).unwrap();
+        assert!(buf[0..MSG.len()] == *MSG);
+    }
+
+    #[test]
+    #[should_panic]
+    fn read_uninitialized_memory() {
+        let mem = Mmu::new(MSG.len());
+        let mut buf = [0; MSG.len()];
+        mem.read(VAddr(0x0), &mut buf).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn write_unallocated_memory() {
+        let mut mem = Mmu::new(MSG.len());
+        mem.write(VAddr(0x0), MSG).unwrap();
     }
 }
