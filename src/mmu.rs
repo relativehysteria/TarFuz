@@ -47,12 +47,16 @@ pub struct Mmu {
     /// This doubles the memory footprint, I am aware
     permissions: Vec<Perm>,
 
-    /// A bitmap tracking dirtied regions in memory.
-    dirty_bitmap: Vec<u128>,
+    /// Indexes into `dirty_bitmap`
+    pub dirty_indexes: Vec<usize>,
+
+    /// A bitmap tracking dirtied regions in memory
+    pub dirty_bitmap: Vec<u128>,
 
     /// Base `VAddr` of the next allocation
     alloc_base: VAddr,
 }
+
 impl Mmu {
 /// Create a new `size` long memory space.
 ///
@@ -68,14 +72,14 @@ impl Mmu {
         // `+1` guarantees that we have at least one element tracking
         // a redundant number of regions.
         let dirty_bm_size = size / DIRTY_BLOCK_SIZE / DBE_BITS + 1;
-        let alloc_base    = VAddr(0x0);
         let aligned_size  = (size + ALIGNMENT) & !ALIGNMENT;
 
         Self {
-            memory:       vec![0; aligned_size],
-            permissions:  vec![Perm(0); aligned_size],
-            dirty_bitmap: vec![0; dirty_bm_size],
-            alloc_base,
+            memory:        vec![0; aligned_size],
+            permissions:   vec![Perm(0); aligned_size],
+            dirty_indexes: Vec::with_capacity(size / DIRTY_BLOCK_SIZE + 1),
+            dirty_bitmap:  vec![0; dirty_bm_size],
+            alloc_base:    VAddr(0x0),
         }
     }
 
@@ -125,10 +129,15 @@ impl Mmu {
         // Track the dirty memory
         let dirty_start = addr.0 / DIRTY_BLOCK_SIZE;
         let dirty_end   = to / DIRTY_BLOCK_SIZE;
-        for _ in dirty_start..=dirty_end {
+        for dirty_block in dirty_start..=dirty_end {
             let idx = dirty_start / DBE_BITS;
             let bit = dirty_start % DBE_BITS;
-            self.dirty_bitmap[idx] |= 1 << bit;
+
+            // Only change the dirty state if the block isn't dirty already
+            if self.dirty_bitmap[idx] & (1 << bit) == 0 {
+                self.dirty_indexes.push(dirty_block);
+                self.dirty_bitmap[idx] |= 1 << bit;
+            }
         }
 
         // RaW: Set the memory to be readable
