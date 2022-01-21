@@ -1,5 +1,10 @@
 #![allow(dead_code)]
 
+/// Size of a dirty block. Used for tracking memory which has been modified
+/// since the emulator started running (either through initialization or through
+/// `fork()`).
+const DIRTY_BLOCK_SIZE: usize = 4096;
+
 // Permission bit field
 /// Write permission
 const PERM_WRITE: u8 = 1 << 0;
@@ -7,6 +12,10 @@ const PERM_WRITE: u8 = 1 << 0;
 const PERM_READ:  u8 = 1 << 1;
 /// Exec permission
 const PERM_EXEC:  u8 = 1 << 2;
+
+/// Dirty-Bitmap-Element BITS.
+/// Number of bits in a single `dirty_bitmap` element
+const DBE_BITS: usize = u128::BITS as usize;
 
 
 /// Memory permissions for a corresponding address
@@ -28,6 +37,9 @@ pub struct Mmu {
     /// This doubles the memory footprint, I am aware
     permissions: Vec<Perm>,
 
+    /// A bitmap tracking dirtied regions in memory.
+    dirty_bitmap: Vec<u128>,
+
     /// Base `VAddr` of the next allocation
     alloc_base: VAddr,
 
@@ -44,10 +56,21 @@ impl Mmu {
         let alignment  = 0xf;
         let alloc_base = VAddr(0x0);
 
+        // Get the size of the `dirty_bitmap` vector.
+        //
+        // `usize::BITS` is used here because the vector holds `usize`s which
+        // can have a various amount of bits. If the vector type is ever changed
+        // to something like `Vec<u64>`, `u64::BITS` should be used instead.
+        //
+        // `+1` guarantees that we have at least one element tracking
+        // a redundant number of regions.
+        let dirty_bm_size = size / DIRTY_BLOCK_SIZE / DBE_BITS + 1;
+
         let aligned_size = (size + alignment) & !alignment;
         Self {
-            memory:      vec![0; aligned_size],
-            permissions: vec![Perm(0); aligned_size],
+            memory:       vec![0; aligned_size],
+            permissions:  vec![Perm(0); aligned_size],
+            dirty_bitmap: vec![0; dirty_bm_size],
             alloc_base,
             alignment,
         }
@@ -89,8 +112,10 @@ impl Mmu {
     /// Write bytes from `buf` to memory at `addr`.
     /// The resulting bytes are set to be readable (`PERM_READ`)
     pub fn write(&mut self, addr: VAddr, buf: &[u8]) -> Option<()> {
-        let perms =
-            self.permissions.get_mut(addr.0..addr.0.checked_add(buf.len())?)?;
+        let from = addr.0;
+        let to   = addr.0.checked_add(buf.len())?;
+
+        let perms = self.permissions.get_mut(from..to)?;
 
         // Check that we can write to memory
         if perms.iter().any(|x| (x.0 & PERM_WRITE) == 0) {
@@ -98,28 +123,36 @@ impl Mmu {
         }
 
         // Write the buffer to memory
-        self.memory.get_mut(addr.0..addr.0.checked_add(buf.len())?)?
-            .copy_from_slice(&buf);
+        self.memory.get_mut(from..to)?.copy_from_slice(&buf);
 
-        // Set it all to be readable
+        // Track the dirty memory
+        let dirty_start = addr.0 / DIRTY_BLOCK_SIZE;
+        let dirty_end   = to / DIRTY_BLOCK_SIZE;
+        for _ in dirty_start..=dirty_end {
+            let idx = dirty_start / DBE_BITS;
+            let bit = dirty_start % DBE_BITS;
+            self.dirty_bitmap[idx] |= 1 << bit;
+        }
+
+        // RaW: Set the memory to be readable
         perms.iter_mut().for_each(|x| x.0 |= PERM_READ);
         Some(())
     }
 
     /// Reads bytes from memory at `addr` to `buf`
     pub fn read(&self, addr: VAddr, buf: &mut [u8]) -> Option<()> {
-        let perms =
-            self.permissions.get(addr.0..addr.0.checked_add(buf.len())?)?;
+        let from = addr.0;
+        let to   = addr.0.checked_add(buf.len())?;
 
-        // Check that we can read from memory
+        let perms = self.permissions.get(from..to)?;
+
+        // Check that we can read from the memory
         if perms.iter().any(|x| (x.0 & PERM_READ) == 0) {
             return None;
         }
 
         // Read the memory
-        buf.copy_from_slice(
-            &self.memory.get(addr.0..addr.0.checked_add(buf.len())?)?
-        );
+        buf.copy_from_slice(&self.memory.get(from..to)?);
         Some(())
     }
 }

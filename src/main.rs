@@ -18,7 +18,7 @@ impl Emulator {
 }
 
 fn main() {
-    let mut emulator = Emulator::new(1024);
+    let mut emulator = Emulator::new(4096);
     let mut buf      = [0; 0x2a];
     let message      = b"This will get overwritten.";
 
