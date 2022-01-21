@@ -48,10 +48,10 @@ pub struct Mmu {
     permissions: Vec<Perm>,
 
     /// Indexes into `dirty_bitmap`
-    pub dirty_indexes: Vec<usize>,
+    dirty_indexes: Vec<usize>,
 
     /// A bitmap tracking dirtied regions in memory
-    pub dirty_bitmap: Vec<u128>,
+    dirty_bitmap: Vec<u128>,
 
     /// Base `VAddr` of the next allocation
     alloc_base: VAddr,
