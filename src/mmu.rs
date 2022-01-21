@@ -1,9 +1,16 @@
 #![allow(dead_code)]
 
+/// Memory is aligned to this base.
+const ALIGNMENT: usize = 0xf;
+
 /// Size of a dirty block. Used for tracking memory which has been modified
 /// since the emulator started running (either through initialization or through
 /// `fork()`).
 const DIRTY_BLOCK_SIZE: usize = 4096;
+
+/// Dirty-Bitmap-Element BITS.
+/// Number of bits in a single `dirty_bitmap` element
+const DBE_BITS: usize = u128::BITS as usize;
 
 // Permission bit field
 /// Write permission
@@ -12,10 +19,6 @@ const PERM_WRITE: u8 = 1 << 0;
 const PERM_READ:  u8 = 1 << 1;
 /// Exec permission
 const PERM_EXEC:  u8 = 1 << 2;
-
-/// Dirty-Bitmap-Element BITS.
-/// Number of bits in a single `dirty_bitmap` element
-const DBE_BITS: usize = u128::BITS as usize;
 
 
 /// Memory permissions for a corresponding address
@@ -27,6 +30,13 @@ pub struct Perm(pub u8);
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VAddr(pub usize);
+
+
+/// Returns the number `num` aligned to `self.alignment`
+#[inline(always)]
+pub fn align(num: usize) -> usize {
+    (num + ALIGNMENT) & !ALIGNMENT
+}
 
 /// Memory space of an emulator
 pub struct Mmu {
@@ -42,20 +52,13 @@ pub struct Mmu {
 
     /// Base `VAddr` of the next allocation
     alloc_base: VAddr,
-
-    /// Memory is aligned to this base
-    alignment: usize,
 }
-
 impl Mmu {
-    /// Create a new `size` long memory space.
-    ///
-    /// Allocation base of the virtual memory is set to `0x0`.
-    /// All memory is aligned to `0xf`.
+/// Create a new `size` long memory space.
+///
+/// Allocation base of the virtual memory is set to `0x0`.
+/// All memory is aligned to `0xf`.
     pub fn new(size: usize) -> Self {
-        let alignment  = 0xf;
-        let alloc_base = VAddr(0x0);
-
         // Get the size of the `dirty_bitmap` vector.
         //
         // `usize::BITS` is used here because the vector holds `usize`s which
@@ -65,28 +68,22 @@ impl Mmu {
         // `+1` guarantees that we have at least one element tracking
         // a redundant number of regions.
         let dirty_bm_size = size / DIRTY_BLOCK_SIZE / DBE_BITS + 1;
+        let alloc_base    = VAddr(0x0);
+        let aligned_size  = (size + ALIGNMENT) & !ALIGNMENT;
 
-        let aligned_size = (size + alignment) & !alignment;
         Self {
             memory:       vec![0; aligned_size],
             permissions:  vec![Perm(0); aligned_size],
             dirty_bitmap: vec![0; dirty_bm_size],
             alloc_base,
-            alignment,
         }
     }
-
-    /// Returns the number `num` aligned to `self.alignment`
-    pub fn align(&self, num: usize) -> usize {
-        (num + self.alignment) & !self.alignment
-    }
-
 
     /// Allocate a region in memory
     pub fn allocate(&mut self, size: usize) -> Option<VAddr> {
         // Update the allocation base
         let cur_base  = VAddr(self.alloc_base.0);
-        let next_base = VAddr(cur_base.0.checked_add(self.align(size))?);
+        let next_base = VAddr(cur_base.0.checked_add(align(size))?);
 
         // Don't allocate OOM
         if next_base.0 > self.memory.len() {
