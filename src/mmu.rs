@@ -124,7 +124,7 @@ impl Mmu {
         }
 
         // Write the buffer to memory
-        self.memory.get_mut(from..to)?.copy_from_slice(&buf);
+        self.memory.get_mut(from..to)?.copy_from_slice(buf);
 
         // Track the dirty memory
         let dirty_start = addr.0 / DIRTY_BLOCK_SIZE;
@@ -158,7 +158,7 @@ impl Mmu {
         }
 
         // Read the memory
-        buf.copy_from_slice(&self.memory.get(from..to)?);
+        buf.copy_from_slice(self.memory.get(from..to)?);
         Some(())
     }
 }
