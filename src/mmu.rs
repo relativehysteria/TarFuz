@@ -45,7 +45,7 @@ pub struct Mmu {
 
     /// Permissions of the corresponding memory.
     /// This doubles the memory footprint, I am aware
-    permissions: Vec<Perm>,
+    pub permissions: Vec<Perm>,
 
     /// Indexes into `dirty_bitmap`
     dirty_indexes: Vec<usize>,
@@ -74,6 +74,12 @@ impl Mmu {
         let dirty_bm_size = size / DIRTY_BLOCK_SIZE / DBE_BITS + 1;
         let aligned_size  = (size + ALIGNMENT) & !ALIGNMENT;
 
+        // Make sure that we have enough memory to track it
+        if aligned_size < DIRTY_BLOCK_SIZE {
+            panic!("Memory size ({}) can't be larger than the given \
+                   DIRTY_BLOCK_SIZE ({}).", size, DIRTY_BLOCK_SIZE);
+        }
+
         Self {
             memory:        vec![0; aligned_size],
             permissions:   vec![Perm(0); aligned_size],
@@ -81,6 +87,38 @@ impl Mmu {
             dirty_bitmap:  vec![0; dirty_bm_size],
             alloc_base:    VAddr(0x0),
         }
+    }
+
+    /// Fork the memory state of the current MMU, clearing all dirty bits.
+    pub fn fork(&self) -> Self {
+        Self {
+            memory:        self.memory.clone(),
+            permissions:   self.permissions.clone(),
+            dirty_indexes: Vec::with_capacity(self.dirty_indexes.capacity()),
+            dirty_bitmap:  vec![0; self.dirty_bitmap.len()],
+            alloc_base:    self.alloc_base,
+        }
+    }
+
+    /// Restore the memory state (dirty blocks) of the current MMU to the state
+    /// of the `other` MMU.
+    pub fn reset(&mut self, other: &Mmu) {
+        for &dirty_idx in &self.dirty_indexes {
+            let from = dirty_idx * DIRTY_BLOCK_SIZE;
+            let to   = (dirty_idx + 1) * DIRTY_BLOCK_SIZE;
+
+            // Reset the bitmap
+            self.dirty_bitmap[dirty_idx / DBE_BITS] = 0;
+
+            // Reset the memory
+            self.memory[from..to]
+                .copy_from_slice(&other.memory[from..to]);
+
+            // Reset the permissions
+            self.permissions[from..to]
+                .copy_from_slice(&other.permissions[from..to]);
+        }
+        self.dirty_indexes.clear();
     }
 
     /// Allocate a region in memory
@@ -171,24 +209,24 @@ mod tests {
 
     #[test]
     fn byte_perfect_allocation() {
-        let mut mem = Mmu::new(MSG.len());
+        let mut mem = Mmu::new(DIRTY_BLOCK_SIZE);
         mem.allocate(MSG.len()).unwrap();
     }
 
     #[test]
     #[should_panic]
     fn out_of_memory() {
-        let mut mem = Mmu::new(0x400);
-        mem.allocate(0x100).unwrap(); // OK
-        mem.allocate(0x100).unwrap(); // OK
-        mem.allocate(0x100).unwrap(); // OK
-        mem.allocate(0x100).unwrap(); // OK
-        mem.allocate(0x1).unwrap();   // Panic
+        let mut mem = Mmu::new(DIRTY_BLOCK_SIZE);
+        mem.allocate(1024).unwrap(); // OK
+        mem.allocate(1024).unwrap(); // OK
+        mem.allocate(1024).unwrap(); // OK
+        mem.allocate(1024).unwrap(); // OK
+        mem.allocate(1).unwrap();    // PANIC
     }
 
     #[test]
     fn read_write() {
-        let mut mem = Mmu::new(MSG.len());
+        let mut mem = Mmu::new(DIRTY_BLOCK_SIZE);
         let mut buf = [0; MSG.len()];
         mem.allocate(MSG.len()).unwrap();
         mem.write(VAddr(0x0), MSG).unwrap();
@@ -199,7 +237,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn read_uninitialized_memory() {
-        let mem = Mmu::new(MSG.len());
+        let mem = Mmu::new(DIRTY_BLOCK_SIZE);
         let mut buf = [0; MSG.len()];
         mem.read(VAddr(0x0), &mut buf).unwrap();
     }
@@ -207,7 +245,28 @@ mod tests {
     #[test]
     #[should_panic]
     fn write_unallocated_memory() {
-        let mut mem = Mmu::new(MSG.len());
+        let mut mem = Mmu::new(DIRTY_BLOCK_SIZE);
         mem.write(VAddr(0x0), MSG).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn reset_permissions() {
+        let mut mem = Mmu::new(DIRTY_BLOCK_SIZE);
+        let base = mem.allocate(DIRTY_BLOCK_SIZE).unwrap();
+        {
+            let mut buf = [0; DIRTY_BLOCK_SIZE];
+            let mut new_mem = mem.fork();
+
+            // Here we write to the memory, so we set `PERM_READ`.
+            // Consecutive read operations shouldn't panic.
+            assert!(new_mem.write(base, &buf).is_some());
+            assert!(new_mem.read(base, &mut buf).is_some());
+
+            // When the memory is reset, permissions are reset as well.
+            // Since we haven't written to the memory yet, we can't read it.
+            new_mem.reset(&mem);
+            new_mem.read(base, &mut buf).unwrap();
+        }
     }
 }
